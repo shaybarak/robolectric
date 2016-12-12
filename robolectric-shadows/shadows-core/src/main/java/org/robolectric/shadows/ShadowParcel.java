@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import static org.robolectric.RuntimeEnvironment.castNativePtr;
 public class ShadowParcel {
   @RealObject private Parcel realObject;
   private static final Map<Long, ByteBuffer> NATIVE_PTR_TO_PARCEL = new LinkedHashMap<>();
+  private static long nextNativePtr = 1; // this needs to start above 0, which is a magic number to Parcel
 
   @Implementation
   public void writeByteArray(byte[] b, int offset, int len) {
@@ -253,15 +255,10 @@ public class ShadowParcel {
   }
 
   @Implementation @HiddenApi
-  public static Number nativeCreate() {
-    // todo: yikes, perf:
-    // Pick a native ptr that hasn't been used.
-    long/*ptr*/ nativePtrUsed = 0;
-    while (NATIVE_PTR_TO_PARCEL.containsKey(nativePtrUsed)) {
-      nativePtrUsed++;
-    }
-    NATIVE_PTR_TO_PARCEL.put(nativePtrUsed, new ByteBuffer());
-    return castNativePtr(nativePtrUsed);
+  synchronized public static Number nativeCreate() {
+    long nativePtr = nextNativePtr++;
+    NATIVE_PTR_TO_PARCEL.put(nativePtr, new ByteBuffer());
+    return castNativePtr(nativePtr);
   }
 
   @HiddenApi
@@ -319,6 +316,35 @@ public class ShadowParcel {
     ByteBuffer thisByteBuffer = NATIVE_PTR_TO_PARCEL.get(thisNativePtr);
     ByteBuffer otherByteBuffer = NATIVE_PTR_TO_PARCEL.get(otherNativePtr);
     thisByteBuffer.appendFrom(otherByteBuffer, offset, length);
+  }
+  
+  @HiddenApi
+  @Implementation(maxSdk = KITKAT_WATCH)
+  public static void nativeWriteInterfaceToken(int nativePtr, String interfaceName) {
+    nativeWriteInterfaceToken((long) nativePtr, interfaceName);
+  }
+
+  @Implementation(minSdk = LOLLIPOP)
+  public static void nativeWriteInterfaceToken(long nativePtr, String interfaceName) {
+    // Write StrictMode.ThreadPolicy bits (assume 0 for test).
+    nativeWriteInt(nativePtr, 0);
+    nativeWriteString(nativePtr, interfaceName);
+  }
+
+  @HiddenApi
+  @Implementation(maxSdk = KITKAT_WATCH)
+  public static void nativeEnforceInterface(int nativePtr, String interfaceName) {
+    nativeEnforceInterface((long) nativePtr, interfaceName);
+  }
+
+  @Implementation(minSdk = LOLLIPOP)
+  public static void nativeEnforceInterface(long nativePtr, String interfaceName) {
+    // Consume StrictMode.ThreadPolicy bits (don't bother setting in test).
+    nativeReadInt(nativePtr);
+    String actualInterfaceName = nativeReadString(nativePtr);
+    if (!Objects.equals(interfaceName, actualInterfaceName)) {
+      throw new SecurityException("Binder invocation to an incorrect interface");
+    }
   }
 
   private static class ByteBuffer {
